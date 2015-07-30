@@ -64,9 +64,16 @@ const ()
 //
 //		/* ... */
 //	}
-type Sender struct {
+type sender struct {
 	APIKey string
 	HTTP   *http.Client
+}
+
+func NewSender(apiKey string, client *http.Client) sender {
+	return sender{
+		APIKey: apiKey,
+		HTTP:   client,
+	}
 }
 
 // HTTPError is a custom error type to handle returning errors with GCM
@@ -81,43 +88,27 @@ func (r *HTTPError) Error() string {
 	return fmt.Sprintf("%d error: %s\nretry-after: %d", r.StatusCode, r.Err, r.RetryAfter)
 }
 
-// SendNoRetry sends a message to the GCM server without retrying in case of
+// sendNoRetry sends a message to the GCM server without retrying in case of
 // service unavailability. A non-nil error is returned if a non-recoverable
 // error occurs (i.e. if the response status is not "200 OK").
-func (s *Sender) SendNoRetry(msg *Message) (*Response, *HTTPError) {
-	if err := checkSender(s); err != nil {
-		return nil, &HTTPError{Err: err}
-	} else if err := checkMessage(msg); err != nil {
-		return nil, &HTTPError{Err: err}
-	}
+//
+// it should only be called from within SendWithRetry(), and so all the checks
+// are assumed to have already been done.
+func (s *sender) sendNoRetry(encodedMsg *[]byte) (*Response, *HTTPError) {
 
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return nil, &HTTPError{Err: err}
-	}
-
-	// fmt.Printf("\ndata: %+v\n", string(data))
-
-	req, err := http.NewRequest("POST", gcmSendEndpoint, bytes.NewBuffer(data))
+	// set up the GCM request
+	req, err := http.NewRequest("POST", gcmSendEndpoint, bytes.NewBuffer(*encodedMsg))
 	if err != nil {
 		return nil, &HTTPError{Err: err}
 	}
 	req.Header.Add("Authorization", fmt.Sprintf("key=%s", s.APIKey))
 	req.Header.Add("Content-Type", "application/json")
 
-	// // print request
-	// reqStr, _ := httputil.DumpRequest(req, true)
-	// fmt.Println("req: ", string(reqStr))
-
 	resp, err := s.HTTP.Do(req)
 	defer resp.Body.Close()
 	if err != nil {
 		return nil, &HTTPError{Err: err}
 	}
-
-	// // print response
-	// respStr, _ := httputil.DumpResponse(resp, true)
-	// fmt.Println("resp: ", string(respStr))
 
 	// if the status is not StatusOK, return with the error
 	if resp.StatusCode != http.StatusOK {
@@ -151,13 +142,25 @@ func (s *Sender) SendNoRetry(msg *Message) (*Response, *HTTPError) {
 //
 // Note that messages are retried using exponential backoff, and as a
 // result, this method may block for several seconds.
-func (s *Sender) Send(msg *Message, retries int) (*Response, *HTTPError) {
+func (s *sender) Send(msg *Message, gcmIDs []string, retries int) (*Response, *HTTPError) {
+	// There must be at least one retry
 	if retries < 0 {
 		return nil, &HTTPError{Err: fmt.Errorf("'retries' must be positive")}
 	}
 
+	if err := s.validate(); err != nil {
+		return nil, &HTTPError{Err: err}
+	} else if err := msg.validate(); err != nil {
+		return nil, &HTTPError{Err: err}
+	}
+
+	jsonMsg, err := json.Marshal(msg)
+	if err != nil {
+		return nil, &HTTPError{Err: err}
+	}
+
 	// Send the message for the first time.
-	resp, httpErr := s.SendNoRetry(msg)
+	resp, httpErr := s.sendNoRetry(&jsonMsg)
 	if httpErr.Err != nil {
 		return nil, httpErr
 	}
@@ -177,7 +180,7 @@ func (s *Sender) Send(msg *Message, retries int) (*Response, *HTTPError) {
 		sleepTime := calculateSleep(backoff)
 		time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 		backoff = min(2*backoff, maxBackoffDelay)
-		if resp, httpErr = s.SendNoRetry(msg); httpErr.Err != nil {
+		if resp, httpErr = s.sendNoRetry(&jsonMsg); httpErr.Err != nil {
 			// set registration ids back to their original values
 			msg.RegistrationIDs = regIDs
 			return nil, httpErr
@@ -273,20 +276,20 @@ func max(a, b int) int {
 	return b
 }
 
-// checkSender returns an error if the sender is not well-formed and
+// validate returns an error if the sender is not well-formed and
 // initializes a zeroed http.Client if one has not been provided.
-func checkSender(sender *Sender) error {
-	if sender.APIKey == "" {
-		return errors.New("The sender's API key must not be empty")
+func (s *sender) validate() error {
+	if s.APIKey == "" {
+		return errors.New("the sender's API key must not be empty")
 	}
-	if sender.HTTP == nil {
-		sender.HTTP = new(http.Client)
+	if s.HTTP == nil {
+		return errors.New("an http client must be provided")
 	}
 	return nil
 }
 
-// checkMessage returns an error if the message is not well-formed.
-func checkMessage(msg *Message) error {
+// validate returns an error if the message is not well-formed.
+func (msg *Message) validate() error {
 	if msg == nil {
 		return errors.New("the message must not be nil")
 	} else if msg.RegistrationIDs == nil {
