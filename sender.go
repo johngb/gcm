@@ -94,10 +94,10 @@ func (r *HTTPError) Error() string {
 //
 // it should only be called from within SendWithRetry(), and so all the checks
 // are assumed to have already been done.
-func (s *sender) sendNoRetry(encodedMsg *[]byte) (*Response, *HTTPError) {
+func (s *sender) sendNoRetry(encodedMsg []byte) (*Response, *HTTPError) {
 
 	// set up the GCM request
-	req, err := http.NewRequest("POST", gcmSendEndpoint, bytes.NewBuffer(*encodedMsg))
+	req, err := http.NewRequest("POST", gcmSendEndpoint, bytes.NewBuffer(encodedMsg))
 	if err != nil {
 		return nil, &HTTPError{Err: err}
 	}
@@ -160,7 +160,7 @@ func (s *sender) Send(msg *Message, gcmIDs []string, retries int) (*Response, *H
 	}
 
 	// Send the message for the first time.
-	resp, httpErr := s.sendNoRetry(&jsonMsg)
+	resp, httpErr := s.sendNoRetry(jsonMsg)
 	if httpErr.Err != nil {
 		return nil, httpErr
 	}
@@ -180,7 +180,7 @@ func (s *sender) Send(msg *Message, gcmIDs []string, retries int) (*Response, *H
 		sleepTime := calculateSleep(backoff)
 		time.Sleep(time.Duration(sleepTime) * time.Millisecond)
 		backoff = min(2*backoff, maxBackoffDelay)
-		if resp, httpErr = s.sendNoRetry(&jsonMsg); httpErr.Err != nil {
+		if resp, httpErr = s.sendNoRetry(jsonMsg); httpErr.Err != nil {
 			// set registration ids back to their original values
 			msg.RegistrationIDs = regIDs
 			return nil, httpErr
