@@ -15,8 +15,8 @@ import (
 
 const (
 	// GcmSendEndpoint is the endpoint for sending messages to the GCM server.
-	// GcmSendEndpoint = "https://android.googleapis.com/gcm/send" // OLD endpoint used
-	GcmSendEndpoint = "fcm.googleapis.com/fcm/send" // New endpoint
+	GcmSendEndpoint = "https://android.googleapis.com/gcm/send" // OLD endpoint used
+	// GcmSendEndpoint = "fcm.googleapis.com/fcm/send" // New endpoint
 	// Initial delay (ms) before first retry, without jitter.
 	initialBackoffDelay = 1000
 	// Maximum delay (ms) before a retry.
