@@ -15,8 +15,8 @@ import (
 
 const (
 	// GcmSendEndpoint is the endpoint for sending messages to the GCM server.
-	GcmSendEndpoint = "https://android.googleapis.com/gcm/send" // OLD endpoint used
-	// GcmSendEndpoint = "fcm.googleapis.com/fcm/send" // New endpoint
+	// GcmSendEndpoint = "https://android.googleapis.com/gcm/send" // OLD endpoint used
+	GcmSendEndpoint = "fcm.googleapis.com/fcm/send" // New endpoint
 	// Initial delay (ms) before first retry, without jitter.
 	initialBackoffDelay = 1000
 	// Maximum delay (ms) before a retry.
@@ -143,7 +143,7 @@ func (s *sender) sendNoRetry(encodedMsg []byte) (*Response, *HTTPError) {
 //
 // Note that messages are retried using exponential backoff, and as a
 // result, this method may block for several seconds.
-func (s *sender) Send(msg *Message, gcmIDs []string, retries int) (*Response, *HTTPError) {
+func (s *sender) Send(msg *Message, retries int) (*Response, *HTTPError) {
 	// There must be at least one retry
 	if retries < 0 {
 		return nil, &HTTPError{Err: fmt.Errorf("'retries' must be positive")}
@@ -172,30 +172,32 @@ func (s *sender) Send(msg *Message, gcmIDs []string, retries int) (*Response, *H
 	}
 
 	// One or more messages failed to send.
-	regIDs := msg.RegistrationIDs // store the original RegistrationIDs
+	To := []string{msg.To} // store the original RegistrationID
 	// TODO: Don't modify the msg object via the pointer, as we may have
 	// multiple goroutines acting on it at once
-	allResults := make(map[string]Result, len(regIDs))
+	allResults := make(map[string]Result)
 	backoff := initialBackoffDelay
 	for i := 0; updateStatus(msg, resp, allResults) > 0 && i < retries; i++ {
 		sleepTime := calculateSleep(backoff)
 		time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+
+		// Calculate the backoff for the next call.
 		backoff = min(2*backoff, maxBackoffDelay)
 		if resp, httpErr = s.sendNoRetry(jsonMsg); httpErr.Err != nil {
 			// set registration ids back to their original values
-			msg.RegistrationIDs = regIDs
+			msg.RegistrationIDs = To
 			return nil, httpErr
 		}
 	}
 
 	// Bring the message back to its original state.
-	msg.RegistrationIDs = regIDs
+	msg.To = To[0]
 
 	// Create a Response containing the overall results.
-	finalResults := make([]Result, len(regIDs))
+	finalResults := make([]Result, len(To))
 	var success, failure, canonicalIDs int
-	for i := 0; i < len(regIDs); i++ {
-		result, _ := allResults[regIDs[i]]
+	for i := 0; i < len(To); i++ {
+		result, _ := allResults[To[i]]
 		finalResults[i] = result
 		if result.MessageID != "" {
 			if result.RegistrationID != "" {
@@ -293,10 +295,8 @@ func (s *sender) validate() error {
 func (msg *Message) validate() error {
 	if msg == nil {
 		return errors.New("the message must not be nil")
-	} else if msg.RegistrationIDs == nil {
-		return errors.New("the message's RegistrationIDs field must not be nil")
-	} else if len(msg.RegistrationIDs) == 0 {
-		return errors.New("the message must specify at least one registration ID")
+	} else if len(msg.RegistrationIDs) == 0 && msg.To == "" {
+		return errors.New("either registration IDs or the To ID must be given")
 	} else if len(msg.RegistrationIDs) > 1000 {
 		return errors.New("the message may specify at most 1000 registration IDs")
 	} else if msg.TimeToLive < 0 || 2419200 < msg.TimeToLive {
